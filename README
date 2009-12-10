@@ -1,0 +1,213 @@
+NAME
+    POE::Component::SmokeBox::Uploads::Rsync - Obtain uploaded CPAN modules
+    via rsync
+
+SYNOPSIS
+            #!/usr/bin/perl
+            use strict; use warnings;
+
+            use POE;
+            use POE::Component::SmokeBox::Uploads::Rsync;
+
+            # Create our session to receive events from rsync
+            POE::Session->create(
+                    package_states => [
+                            'main' => [qw(_start upload)],
+                    ],
+            );
+
+            sub _start {
+                    # Tell the poco to start it's stuff!
+                    POE::Component::SmokeBox::Uploads::Rsync->spawn(
+                            # thanks to DAGOLDEN for allowing us to use his mirror!
+                            'rsync_src'     => 'cpan.dagolden.com::CPAN',
+                    ) or die "Unable to spawn the poco-rsync!";
+
+                    return;
+            }
+
+            sub upload {
+                    print $_[ARG0], "\n";
+                    return;
+            }
+
+            POE::Kernel->run;
+
+ABSTRACT
+    POE::Component::SmokeBox::Uploads::Rsync is a POE component that alerts
+    newly uploaded CPAN distributions. It obtains this information by
+    running rsync against a CPAN mirror. This effectively keeps your local
+    CPAN mirror up-to-date too!
+
+DESCRIPTION
+    Really, all you have to do is load the module and call it's spawn()
+    method:
+
+            use POE::Component::SmokeBox::Uploads::Rsync;
+            POE::Component::SmokeBox::Uploads::Rsync->spawn( ... );
+
+    This method will return failure on errors or return success. Normally
+    you just need to set the rsync server. ( rsync_src )
+
+    This constructor accepts either a hashref or a hash, valid options are:
+
+   alias
+    This sets the alias of the session.
+
+    The default is: SmokeBox-Rsync
+
+   rsync_src
+    This sets the rsync source ( the server you will be mirroring from ) and
+    it is a mandatory parameter. For a list of valid rsync mirrors, please
+    consult the <http://www.cpan.org/SITES.html#RSYNC> mirror list.
+
+    The default is: undefined
+
+   rsync_dst
+    This sets the local rsync destination ( where your local CPAN mirror
+    resides )
+
+    The default is: $ENV{HOME}/CPAN
+
+   rsync
+    This sets the rsync options. Normally you do not need to touch this, but
+    if you do - please be aware that your options clobbers the default
+    values! Please look at the File::Rsync manpage for the options. Again,
+    touch this if you know what you are doing!
+
+    The default is:
+
+            {
+                    archive=>1,
+                    compress=>1,
+                    omit-dir-times=>1,
+                    itemize-changes=>1,
+                    exclude=[ /indices/, /misc/, /src/, /scripts/, /modules/.FRMRecent-*, /authors/.FRMRecent-* ],
+                    literal=[ --no-motd ]
+            }
+
+    NOTE: By default we only mirror the /authors/ and /modules/
+    subdirectories of CPAN. If you want to keep your mirror up-to-date with
+    regards to the other paths, please use your normal ( crontabbed? ) rsync
+    script and tell it to exclude authors+modules to prevent missed dists.
+
+    NOTE: The usage of "omit-dir-times/itemize-changes" means you need a
+    rsync newer than v2.6.4!
+
+   interval
+    This sets the seconds between rsync mirror executions. Please don't set
+    it to a low value unless you have permission from the mirror admin!
+
+    The default is: 3600
+
+   event
+    This sets the event which will receive notification about uploaded
+    dists. It will receive one argument in ARG0, which is a single string.
+    An example is:
+
+            V/VP/VPIT/CPANPLUS-Dist-Gentoo-0.07.tar.gz
+
+    The default is: upload
+
+   session
+    This sets the session which will receive the notification event. You can
+    either use a POE session id, alias, or reference. You can just spawn the
+    component inside another session and it will automatically receive the
+    notifications.
+
+    The default is: undef ( caller session )
+
+   rsyncdone
+    This sets an additional event when the rsync process is done executing.
+    It will receive a hashref in ARG0 which details some information. An
+    example is:
+
+            {
+                    'status'        => 1,           # boolean value whether the rsync run was successful or not
+                    'exit'          => 0,           # exit code of the rsync process, useful to look up rsync errors ( already bit-shifted! )
+                    'starttime'     => 1260432932,  # self-explanatory
+                    'stoptime'      => 1260432965,  # self-explanatory
+                    'dists'         => 7,           # number of new distributions uploaded to CPAN
+            }
+
+    NOTE: In my testing sometimes rsync throws an exit code of 23 ( Partial
+    transfer due to error ) or 24 ( Partial transfer due to vanished source
+    files ), this module automatically treats them as "success" and sets the
+    exit code to 0. This is caused by the intricacies of rsync trying to
+    mirror some forbidden files and deletions on the host. Hence, the
+    ".FRMRecent" stuff you see in the exclude list - this is one of the
+    common error 23 causes :)
+
+    The default is: undef ( not enabled )
+
+  Commands
+    There is only one command you can use, as this is a very simple module.
+
+   shutdown
+    Tells this module to shut down the underlying rsync session and
+    terminate itself.
+
+            $_[KERNEL]->post( 'SmokeBox-Rsync', 'shutdown' );
+
+  More Ideas
+    None as of now, if you have ideas please submit them to me!
+
+  Module Notes
+    You can enable debugging mode by doing this:
+
+            sub POE::Component::SmokeBox::Uploads::Rsync::DEBUG () { 1 }
+            use POE::Component::SmokeBox::Uploads::Rsync;
+
+SEE ALSO
+    POE::Component::SmokeBox
+
+    File::Rsync
+
+SUPPORT
+    You can find documentation for this module with the perldoc command.
+
+        perldoc POE::Component::SmokeBox::Uploads::Rsync
+
+  Websites
+    *   AnnoCPAN: Annotated CPAN documentation
+
+        <http://annocpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
+    *   CPAN Ratings
+
+        <http://cpanratings.perl.org/d/POE-Component-SmokeBox-Uploads-Rsync>
+
+    *   RT: CPAN's request tracker
+
+        <http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-SmokeBox-Upl
+        oads-Rsync>
+
+    *   Search CPAN
+
+        <http://search.cpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
+    *   CPAN Testing Service
+
+        <http://cpants.perl.org/dist/overview/POE-Component-SmokeBox-Uploads
+        -Rsync>
+
+  Bugs
+    Please report any bugs or feature requests to
+    "poe-component-smokebox-uploads-rsync at rt.cpan.org", or through the
+    web interface at
+    <http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-SmokeBox-U
+    ploads-Rsync>. I will be notified, and then you'll automatically be
+    notified of progress on your bug as I make changes.
+
+AUTHOR
+    Apocalypse <apocal@cpan.org>
+
+    Thanks to BinGOs for writing the excellent POE::Component::SmokeBox
+    module!
+
+COPYRIGHT AND LICENSE
+    Copyright 2009 by Apocalypse
+
+    This library is free software; you can redistribute it and/or modify it
+    under the same terms as Perl itself.
+
