@@ -49,6 +49,7 @@ DESCRIPTION
     This method will return failure on errors or return success. Normally
     you just need to set the rsync server. ( rsync_src )
 
+  spawn()
     This constructor accepts either a hashref or a hash, valid options are:
 
    alias
@@ -143,7 +144,7 @@ DESCRIPTION
   Commands
     There is only one command you can use, as this is a very simple module.
 
-   shutdown
+   shutdown()
     Tells this module to shut down the underlying rsync session and
     terminate itself.
 
@@ -169,6 +170,10 @@ SUPPORT
         perldoc POE::Component::SmokeBox::Uploads::Rsync
 
   Websites
+    *   Search CPAN
+
+        <http://search.cpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
     *   AnnoCPAN: Annotated CPAN documentation
 
         <http://annocpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
@@ -177,19 +182,25 @@ SUPPORT
 
         <http://cpanratings.perl.org/d/POE-Component-SmokeBox-Uploads-Rsync>
 
-    *   RT: CPAN's request tracker
+    *   RT: CPAN's Request Tracker
 
         <http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-SmokeBox-Upl
         oads-Rsync>
 
-    *   Search CPAN
-
-        <http://search.cpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
-
-    *   CPAN Testing Service
+    *   CPANTS Kwalitee
 
         <http://cpants.perl.org/dist/overview/POE-Component-SmokeBox-Uploads
         -Rsync>
+
+    *   CPAN Testers Results
+
+        <http://cpantesters.org/distro/P/POE-Component-SmokeBox-Uploads-Rsyn
+        c.html>
+
+    *   CPAN Testers Matrix
+
+        <http://matrix.cpantesters.org/?dist=POE-Component-SmokeBox-Uploads-
+        Rsync>
 
   Bugs
     Please report any bugs or feature requests to
@@ -206,7 +217,7 @@ AUTHOR
     module!
 
 COPYRIGHT AND LICENSE
-    Copyright 2009 by Apocalypse
+    Copyright 2010 by Apocalypse
 
     This library is free software; you can redistribute it and/or modify it
     under the same terms as Perl itself.
