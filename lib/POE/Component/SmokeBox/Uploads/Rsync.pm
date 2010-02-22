@@ -4,7 +4,7 @@ use strict; use warnings;
 
 # Initialize our version
 use vars qw( $VERSION );
-$VERSION = '0.02';
+$VERSION = '0.03';
 
 # Import what we need from the POE namespace
 use POE;
@@ -588,6 +588,10 @@ L<http://annocpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
 
 L<http://cpanratings.perl.org/d/POE-Component-SmokeBox-Uploads-Rsync>
 
+=item * CPAN Forum
+
+L<http://cpanforum.com/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
 =item * RT: CPAN's Request Tracker
 
 L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-SmokeBox-Uploads-Rsync>
@@ -603,6 +607,10 @@ L<http://cpantesters.org/distro/P/POE-Component-SmokeBox-Uploads-Rsync.html>
 =item * CPAN Testers Matrix
 
 L<http://matrix.cpantesters.org/?dist=POE-Component-SmokeBox-Uploads-Rsync>
+
+=item * Git Source Code Repository
+
+L<http://github.com/apocalypse/perl-poe-smokebox-uploads-rsync>
 
 =back
 

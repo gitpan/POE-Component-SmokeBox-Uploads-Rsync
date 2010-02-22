@@ -182,6 +182,10 @@ SUPPORT
 
         <http://cpanratings.perl.org/d/POE-Component-SmokeBox-Uploads-Rsync>
 
+    *   CPAN Forum
+
+        <http://cpanforum.com/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
     *   RT: CPAN's Request Tracker
 
         <http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-SmokeBox-Upl
@@ -201,6 +205,10 @@ SUPPORT
 
         <http://matrix.cpantesters.org/?dist=POE-Component-SmokeBox-Uploads-
         Rsync>
+
+    *   Git Source Code Repository
+
+        <http://github.com/apocalypse/perl-poe-smokebox-uploads-rsync>
 
   Bugs
     Please report any bugs or feature requests to
