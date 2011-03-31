@@ -1,18 +1,34 @@
-# Declare our package
-package POE::Component::SmokeBox::Uploads::Rsync;
+#
+# This file is part of POE-Component-SmokeBox-Uploads-Rsync
+#
+# This software is copyright (c) 2011 by Apocalypse.
+#
+# This is free software; you can redistribute it and/or modify it under
+# the same terms as the Perl 5 programming language system itself.
+#
 use strict; use warnings;
+package POE::Component::SmokeBox::Uploads::Rsync;
+BEGIN {
+  $POE::Component::SmokeBox::Uploads::Rsync::VERSION = '1.000';
+}
+BEGIN {
+  $POE::Component::SmokeBox::Uploads::Rsync::AUTHORITY = 'cpan:APOCAL';
+}
 
-# Initialize our version
-use vars qw( $VERSION );
-$VERSION = '0.03';
+# ABSTRACT: Obtain uploaded CPAN modules via rsync
 
 # Import what we need from the POE namespace
 use POE;
 use POE::Component::Generic;
-use base 'POE::Session::AttributeBased';
+use parent 'POE::Session::AttributeBased'; # TODO do we really need to prereq 0.09?
 
 # The misc stuff we will use
 use File::Spec;
+
+# TODO argh, we need to fool Test::Apocalypse::Dependencies!
+if ( 0 ) {
+	require File::Rsync;
+}
 
 # Set some constants
 BEGIN {
@@ -49,19 +65,34 @@ sub spawn {
 		}
 		return 0;
 	} else {
-		# TODO verify it's a valid rsync path
+		# TODO should we verify it's a valid rsync path?
 		# i.e. 'cpan.cpantesters.org::cpan'
+
+		# Append the authors/id directory
+		if ( $opt{'rsync_src'} !~ m|authors/id$| ) {
+			if ( $opt{'rsync_src'} =~ m|/$| ) {
+				$opt{'rsync_src'} .= 'authors/id';
+			} else {
+				$opt{'rsync_src'} .= '/authors/id';
+			}
+		}
 	}
 
 	# Setup the rsync local destination
+	# Append the authors directory ( rsync will sync into id automatically )
+	# If we appended "authors/id" then rsync will create a local authors/id/id directory!$!@%#$
 	if ( ! exists $opt{'rsync_dst'} or ! defined $opt{'rsync_dst'} ) {
-		my $dir = File::Spec->catdir( $ENV{HOME}, 'CPAN' );
+		my $dir = File::Spec->catdir( $ENV{HOME}, 'CPAN', 'authors' );
 		if ( DEBUG ) {
 			warn 'Using default RSYNC_DST = ' . $dir;
 		}
 
 		# Set the default
 		$opt{'rsync_dst'} = $dir;
+	} else {
+		if ( $opt{'rsync_dst'} !~ /authors$/ ) {
+			$opt{'rsync_dst'} = File::Spec->catdir( $opt{'rsync_dst'}, 'authors' );
+		}
 	}
 
 	# validate the dst path
@@ -73,7 +104,7 @@ sub spawn {
 	# setup the RSYNC opts
 	if ( ! exists $opt{'rsync'} or ! defined $opt{'rsync'} ) {
 		if ( DEBUG ) {
-			warn 'Using default RSYNC = { archive=>1, compress=>1, omit-dir-times=>1, itemize-changes=>1, exclude=[ /indices/, /misc/, /src/, /scripts/, /modules/.FRMRecent-*, /authors/.FRMRecent-* ], literal=[ --no-motd ] }';
+			warn 'Using default RSYNC = { archive=>1, compress=>1, omit-dir-times=>1, itemize-changes=>1, timeout=>600, contimeout=>120, literal=[ --no-motd ] }';
 		}
 
 		# Set the default
@@ -91,13 +122,8 @@ sub spawn {
 		'archive'		=> 1,
 		'compress'		=> 1,
 		'itemize-changes'	=> 1,
-#		'include'		=> [ '/authors/', '/modules/' ],	# doesn't do what I expect...
-
-		# skip the unimportant directories
-		# skip some files that always fails to sync, and is not needed...
-		# rsync: send_files failed to open "/modules/.FRMRecent-RECENT-1h.yaml-zr8t.yaml" (in cpan): Permission denied (13)
-		# rsync: send_files failed to open "/authors/.FRMRecent-RECENT.recent-qtlN.recent" (in cpan): Permission denied (13)
-		'exclude'		=> [ '/indices/', '/misc/', '/src/', '/scripts/', '/modules/.FRMRecent-*', '/authors/.FRMRecent-*', ],
+		'timeout'		=> 10 * 60,	# 10min
+		'contimeout'		=> 2 * 60,	# 2min
 
 		# skip the motd, which just consumes bandwidth ;)
 		'literal'		=> [ '--no-motd', ],
@@ -110,6 +136,10 @@ sub spawn {
 	# merge rsync_src/dst
 	$opt{'rsync'}->{'src'} = delete $opt{'rsync_src'};
 	$opt{'rsync'}->{'dst'} = delete $opt{'rsync_dst'};
+
+	# TODO File::Rsync doesn't support contimeout!
+	# Ticket here: https://rt.cpan.org/Ticket/Display.html?id=67076
+	push( @{ $opt{'rsync'}{'literal'} }, "--contimeout=" . delete $opt{'rsync'}{'contimeout'} );
 
 	# setup the alias
 	if ( ! exists $opt{'alias'} or ! defined $opt{'alias'} ) {
@@ -130,7 +160,11 @@ sub spawn {
 		# set the default
 		$opt{'interval'} = 3600;
 	} else {
-		# TODO verify it's a valid numeric amount
+		# verify it's a valid numeric amount
+		if ( $opt{'interval'} !~ /^\d+$/ or $opt{'interval'} < 1 ) {
+			warn "The INTERVAL argument is not a valid number!";
+			return 0;
+		}
 	}
 
 	# Setup the event
@@ -162,10 +196,13 @@ sub spawn {
 		# set the default
 		$opt{'session'} = undef;
 	} else {
-		# Convert it to an ID
-		if ( UNIVERSAL::isa( $opt{'session'}, 'POE::Session' ) ) {
-			$opt{'session'} = $opt{'session'}->ID;
-		}
+		# eval it because it might already be a regular scalar...
+		eval {
+			# Convert it to an ID
+			if ( $opt{'session'}->isa( 'POE::Session' ) ) {
+				$opt{'session'} = $opt{'session'}->ID;
+			}
+		};
 	}
 
 	# Create our session
@@ -210,37 +247,38 @@ sub _start : State {
 	# Give it a refcount
 	$_[KERNEL]->refcount_increment( $_[HEAP]->{'SESSION'}, __PACKAGE__ );
 
-	# spawn poco-generic
-	$_[HEAP]->{'RSYNC'} = POE::Component::Generic->spawn(
-		'package'		=> 'File::Rsync',
-		'methods'		=> [ qw( exec status out err ) ],
-
-		'object_options'	=> [ %{ $_[HEAP]->{'RSYNC_OPT'} } ],
-		'alias'			=> $_[HEAP]->{'ALIAS'} . '-' . 'Generic',
-
-		( DEBUG ? ( 'debug' => 1, 'error' => 'generic_error' ) : () ),
-	);
-
 	# Do the first rsync!
-	$_[KERNEL]->yield( 'do_rsync' );
+	$_[KERNEL]->yield( '_rsync_start' );
 
 	return;
 }
 
-sub do_rsync : State {
+sub _rsync_start : State {
 	if ( DEBUG ) {
 		warn 'Starting rsync run...';
 	}
 
 	$_[HEAP]->{'STARTTIME'} = time;
 
+	# spawn poco-generic
+	$_[HEAP]->{'RSYNC'} = POE::Component::Generic->spawn(
+		'alt_fork'		=> 1,	# conserve memory by using exec
+		'package'		=> 'File::Rsync',
+		'methods'		=> [ qw( exec status out err ) ],
+
+		'object_options'	=> [ %{ $_[HEAP]->{'RSYNC_OPT'} } ],
+		'alias'			=> $_[HEAP]->{'ALIAS'} . '-' . 'Generic',
+
+		( DEBUG ? ( 'debug' => 1, 'error' => '_rsync_generic_error' ) : () ),
+	);
+
 	# tell poco-generic to do it!
-	$_[HEAP]->{'RSYNC'}->exec( { 'event' => 'rsync_exec_result' } );
+	$_[HEAP]->{'RSYNC'}->exec( { 'event' => '_rsync_exec_result' } );
 
 	return;
 }
 
-sub rsync_exec_result : State {
+sub _rsync_exec_result : State {
 	my( $ref, $result ) = @_[ARG0, ARG1];
 
 	if ( DEBUG ) {
@@ -250,16 +288,16 @@ sub rsync_exec_result : State {
 	# Was it successful?
 	if ( $result ) {
 		# Get the stdout listing so we can parse it for uploaded files
-		$_[HEAP]->{'RSYNC'}->out( { 'event' => 'rsync_out_result' } );
+		$_[HEAP]->{'RSYNC'}->out( { 'event' => '_rsync_out_result' } );
 	} else {
 		# Get the exit code
-		$_[HEAP]->{'RSYNC'}->status( { 'event' => 'rsync_status_result' } );
+		$_[HEAP]->{'RSYNC'}->status( { 'event' => '_rsync_status_result' } );
 	}
 
 	return;
 }
 
-sub rsync_status_result : State {
+sub _rsync_status_result : State {
 	my( $ref, $result ) = @_[ARG0, ARG1];
 
 	# We ignore status 23/24 errors, it happens occassionally...
@@ -269,12 +307,15 @@ sub rsync_status_result : State {
 		}
 
 		# Get the stdout listing so we can parse it for uploaded files
-		$_[HEAP]->{'RSYNC'}->out( { 'event' => 'rsync_out_result' } );
+		$_[HEAP]->{'RSYNC'}->out( { 'event' => '_rsync_out_result' } );
 	} else {
-
 		if ( DEBUG ) {
 			warn "Rsync exec error - status: $result";
-			$_[HEAP]->{'RSYNC'}->err( { 'event' => 'rsync_err_result' } );
+			$_[HEAP]->{'RSYNC'}->err( { 'event' => '_rsync_err_result' } );
+		} else {
+			# We're done with the rsync subprocess, shut it down!
+			$_[KERNEL]->post( $_[HEAP]->{'RSYNC'}->session_id, 'shutdown' );
+			undef $_[HEAP]->{'RSYNC'};
 		}
 
 		# Let the session know the run is done
@@ -282,6 +323,7 @@ sub rsync_status_result : State {
 			$_[KERNEL]->post( $_[HEAP]->{'SESSION'}, $_[HEAP]->{'RSYNCDONE'}, {
 				'status'	=> 0,
 				'exit'		=> $result,
+				'exit_str'	=> rsync_exit_string( $result ),
 				'starttime'	=> $_[HEAP]->{'STARTTIME'},
 				'stoptime'	=> time,
 				'dists'		=> 0,
@@ -289,39 +331,47 @@ sub rsync_status_result : State {
 		}
 
 		# Do another run in INTERVAL
-		$_[KERNEL]->delay_set( 'do_rsync' => $_[HEAP]->{'INTERVAL'} );
+		$_[KERNEL]->delay_set( '_rsync_start' => $_[HEAP]->{'INTERVAL'} );
 	}
 
 	return;
 }
 
-sub rsync_err_result : State {
+sub _rsync_err_result : State {
 	my( $ref, $result ) = @_[ARG0, ARG1];
 
-	require Data::Dumper;
-	warn "Got rsync err buffer: " . Data::Dumper::Dumper( $result );
+	warn "Got rsync STDERR:";
+	warn $_ for @$result;
+
+	# We're done with the rsync subprocess, shut it down!
+	$_[KERNEL]->post( $_[HEAP]->{'RSYNC'}->session_id, 'shutdown' );
+	undef $_[HEAP]->{'RSYNC'};
 
 	return;
 }
 
-sub rsync_out_result : State {
+sub _rsync_out_result : State {
 	my( $ref, $result ) = @_[ARG0, ARG1];
+
+	# We're done with the rsync subprocess, shut it down!
+	$_[KERNEL]->post( $_[HEAP]->{'RSYNC'}->session_id, 'shutdown' );
+	undef $_[HEAP]->{'RSYNC'};
 
 	# Parse the result, and inform the session of new uploads!
 	# Look at the rsync man page for details on the itemize-changes format
-	# >f.st...... authors/id/R/RC/RCAPUTO/CHECKSUMS
-	# >f.st...... authors/id/R/RD/RDB/CHECKSUMS
-	# >f+++++++++ authors/id/R/RD/RDB/POE-Component-SNMP-1.1004.meta
-	# >f+++++++++ authors/id/R/RD/RDB/POE-Component-SNMP-1.1004.readme
-	# >f+++++++++ authors/id/R/RD/RDB/POE-Component-SNMP-1.1004.tar.gz
-	# >f+++++++++ authors/id/R/RD/RDB/POE-Component-SNMP-1.1005.meta
-	# >f+++++++++ authors/id/R/RD/RDB/POE-Component-SNMP-1.1005.readme
-	# >f+++++++++ authors/id/R/RD/RDB/POE-Component-SNMP-1.1005.tar.gz
-	# >f.st...... authors/id/R/RE/REDICAPS/CHECKSUMS
+	# >f.st...... id/R/RC/RCAPUTO/CHECKSUMS
+	# >f.st...... id/R/RD/RDB/CHECKSUMS
+	# >f+++++++++ id/R/RD/RDB/POE-Component-SNMP-1.1004.meta
+	# >f+++++++++ id/R/RD/RDB/POE-Component-SNMP-1.1004.readme
+	# >f+++++++++ id/R/RD/RDB/POE-Component-SNMP-1.1004.tar.gz
+	# >f+++++++++ id/R/RD/RDB/POE-Component-SNMP-1.1005.meta
+	# >f+++++++++ id/R/RD/RDB/POE-Component-SNMP-1.1005.readme
+	# >f+++++++++ id/R/RD/RDB/POE-Component-SNMP-1.1005.tar.gz
+	# >f.st...... id/R/RE/REDICAPS/CHECKSUMS
 	my @modules;
 	foreach my $l ( @$result ) {
 		# file regex taken from POE::Component::SmokeBox::Uploads::NNTP, thanks BinGOs!
-		if ( $l =~ /^\>f\+{9}\s+authors\/id\/(\w+\/\w+\/\w+\/.+\.(?:tar\.(?:gz|bz2)|tgz|zip))$/ ) {
+		if ( $l =~ /^\>f\+{9}\s+id\/(\w+\/\w+\/\w+\/.+\.(?:tar\.(?:gz|bz2)|tgz|zip))$/ ) {
 			push( @modules, $1 );
 		}
 	}
@@ -331,6 +381,7 @@ sub rsync_out_result : State {
 		$_[KERNEL]->post( $_[HEAP]->{'SESSION'}, $_[HEAP]->{'RSYNCDONE'}, {
 			'status'	=> 1,
 			'exit'		=> 0,
+			'exit_str'	=> rsync_exit_string( 0 ),
 			'starttime'	=> $_[HEAP]->{'STARTTIME'},
 			'stoptime'	=> time,
 			'dists'		=> scalar @modules,
@@ -343,15 +394,15 @@ sub rsync_out_result : State {
 	}
 
 	# Do another run in INTERVAL
-	$_[KERNEL]->delay_set( 'do_rsync' => $_[HEAP]->{'INTERVAL'} );
+	$_[KERNEL]->delay_set( '_rsync_start' => $_[HEAP]->{'INTERVAL'} );
 
 	return;
 }
 
-sub generic_error : State {
+sub _rsync_generic_error : State {
 	my $err = $_[ARG0];
 
-	if( $err->{stderr} ) {	## no critic ( ProhibitAccessOfPrivateData )
+	if( $err->{stderr} ) {
 		# $err->{stderr} is a line that was printed to the
 		# sub-processes' STDERR.  99% of the time that means from
 		# your code.
@@ -391,6 +442,7 @@ sub shutdown : State {
 	# tell poco-generic to shutdown
 	if ( defined $_[HEAP]->{'RSYNC'} ) {
 		$_[KERNEL]->call( $_[HEAP]->{'RSYNC'}->session_id, 'shutdown' );
+		undef $_[HEAP]->{'RSYNC'};
 	}
 
 	# decrement the refcount
@@ -401,14 +453,57 @@ sub shutdown : State {
 	return;
 }
 
-1;
-__END__
+{
+	# Taken from the rsync v3.0.8 manpage
+	my %exitcodes = (
+		0  => 'Success',
+		1  => 'Syntax or usage error',
+		2  => 'Protocol incompatibility',
+		3  => 'Errors selecting input/output files, dirs',
+		4  => 'Requested action not supported: an attempt was made to manipulate 64-bit files on a platform that cannot support them; or an option was specified that is supported by the client and not by the server.',
+		5  => 'Error starting client-server protocol',
+		6  => 'Daemon unable to append to log-file',
+		10 => 'Error in socket I/O',
+		11 => 'Error in file I/O',
+		12 => 'Error in rsync protocol data stream',
+		13 => 'Errors with program diagnostics',
+		14 => 'Error in IPC code',
+		20 => 'Received SIGUSR1 or SIGINT',
+		21 => 'Some error returned by waitpid()',
+		22 => 'Error allocating core memory buffers',
+		23 => 'Partial transfer due to error',
+		24 => 'Partial transfer due to vanished source files',
+		25 => 'The --max-delete limit stopped deletions',
+		30 => 'Timeout in data send/receive',
+		35 => 'Timeout waiting for daemon connection',
+	);
 
-=for stopwords POE AnnoCPAN CPAN RT arg admin crontabbed dists rsyncdone BinGOs frmrecent
+	sub rsync_exit_string {
+		return $exitcodes{ $_[0] };
+	}
+}
+
+1;
+
+
+__END__
+=pod
+
+=for :stopwords Apocalypse cpan testmatrix url annocpan anno bugtracker rt cpants kwalitee
+diff irc mailto metadata placeholders ARG admin crontabbed dists rsyncdone
+BinGOs
+
+=encoding utf-8
+
+=for Pod::Coverage DEBUG rsync_exit_string
 
 =head1 NAME
 
 POE::Component::SmokeBox::Uploads::Rsync - Obtain uploaded CPAN modules via rsync
+
+=head1 VERSION
+
+  This document describes v1.000 of POE::Component::SmokeBox::Uploads::Rsync - released March 31, 2011 as part of POE-Component-SmokeBox-Uploads-Rsync.
 
 =head1 SYNOPSIS
 
@@ -442,12 +537,12 @@ POE::Component::SmokeBox::Uploads::Rsync - Obtain uploaded CPAN modules via rsyn
 
 	POE::Kernel->run;
 
-=head1 ABSTRACT
+=head1 DESCRIPTION
 
 POE::Component::SmokeBox::Uploads::Rsync is a POE component that alerts newly uploaded CPAN distributions. It obtains this information by
-running rsync against a CPAN mirror. This effectively keeps your local CPAN mirror up-to-date too!
-
-=head1 DESCRIPTION
+running rsync against a CPAN mirror. This effectively keeps your local CPAN mirror up-to-date too! This is only for the C<CPAN/authors/id>
+directory, to make it easier on the rsync process. If you want to keep your entire mirror up-to-date, please use your normal
+( crontabbed? ) rsync script and tell it to exclude the C<authors/id> directory to prevent missed uploads.
 
 Really, all you have to do is load the module and call it's spawn() method:
 
@@ -469,9 +564,11 @@ The default is: SmokeBox-Rsync
 =head3 rsync_src
 
 This sets the rsync source ( the server you will be mirroring from ) and it is a mandatory parameter. For a list of valid rsync mirrors, please
-consult the L<http://www.cpan.org/SITES.html#RSYNC> mirror list.
+consult the L<http://www.cpan.org/SITES.html> mirror list.
 
 The default is: undefined
+
+This component will automatically append '/authors/id' to the src, please don't add it yourself.
 
 =head3 rsync_dst
 
@@ -479,36 +576,37 @@ This sets the local rsync destination ( where your local CPAN mirror resides )
 
 The default is: $ENV{HOME}/CPAN
 
+This component will automatically append '/authors' to the dst, please don't add it yourself.
+
 =head3 rsync
 
-This sets the rsync options. Normally you do not need to touch this, but if you do - please be aware that your options clobbers the default values! Please
-look at the L<File::Rsync> manpage for the options. Again, touch this if you know what you are doing!
+This sets the rsync options. Normally you do not need to touch this, but if you do - please be aware that your options clobbers the default
+values! Please look at the L<File::Rsync> manpage for the options. Again, touch this if you know what you are doing!
 
 The default is:
 
 	{
-		archive=>1,
-		compress=>1,
-		omit-dir-times=>1,
-		itemize-changes=>1,
-		exclude=[ /indices/, /misc/, /src/, /scripts/, /modules/.FRMRecent-*, /authors/.FRMRecent-* ],
-		literal=[ --no-motd ]
+		archive 	=> 1,
+		compress 	=> 1,
+		omit-dir-times	=> 1,
+		itemize-changes	=> 1,
+		timeout		=> 10 * 60,	# 10min
+		contimeout	=> 2 * 60,	# 2min
+		literal 	=> [ qw( --no-motd ) ],
 	}
 
-NOTE: By default we only mirror the /authors/ and /modules/ subdirectories of CPAN. If you want to keep your mirror up-to-date with regards to the other paths,
-please use your normal ( crontabbed? ) rsync script and tell it to exclude authors+modules to prevent missed dists.
-
-NOTE: The usage of "omit-dir-times/itemize-changes" means you need a rsync newer than v2.6.4!
+NOTE: The usage of "omit-dir-times/itemize-changes/contimeout" means you need a rsync newer than v3.0.0!
 
 =head3 interval
 
 This sets the seconds between rsync mirror executions. Please don't set it to a low value unless you have permission from the mirror admin!
 
-The default is: 3600
+The default is: 3600 ( 1 hour )
 
 =head3 event
 
-This sets the event which will receive notification about uploaded dists. It will receive one argument in ARG0, which is a single string. An example is:
+This sets the event which will receive notification about uploaded dists. It will receive one argument in ARG0, which is a single string. An
+example is:
 
 	V/VP/VPIT/CPANPLUS-Dist-Gentoo-0.07.tar.gz
 
@@ -516,26 +614,28 @@ The default is: upload
 
 =head3 session
 
-This sets the session which will receive the notification event. You can either use a POE session id, alias, or reference. You can just spawn the component
-inside another session and it will automatically receive the notifications.
+This sets the session which will receive the notification event. You can either use a POE session id, alias, or reference. You can just spawn
+the component inside another session and it will automatically receive the notifications.
 
 The default is: undef ( caller session )
 
 =head3 rsyncdone
 
-This sets an additional event when the rsync process is done executing. It will receive a hashref in ARG0 which details some information. An example is:
+This sets an additional event when the rsync process is done executing. It will receive a hashref in ARG0 which details some information. An
+example is:
 
 	{
 		'status'	=> 1,		# boolean value whether the rsync run was successful or not
 		'exit'		=> 0,		# exit code of the rsync process, useful to look up rsync errors ( already bit-shifted! )
+		'exit_str'	=> 'Success',	# stringified exit code of the rsync process
 		'starttime'	=> 1260432932,	# self-explanatory
 		'stoptime'	=> 1260432965,	# self-explanatory
 		'dists'		=> 7,		# number of new distributions uploaded to CPAN
 	}
 
-NOTE: In my testing sometimes rsync throws an exit code of 23 ( Partial transfer due to error ) or 24 ( Partial transfer due to vanished source files ),
-this module automatically treats them as "success" and sets the exit code to 0. This is caused by the intricacies of rsync trying to mirror some forbidden
-files and deletions on the host. Hence, the ".FRMRecent" stuff you see in the exclude list - this is one of the common error 23 causes :)
+NOTE: In my testing sometimes rsync throws an exit code of 23 ( Partial transfer due to error ) or 24 ( Partial transfer due to vanished source
+files ), this module automatically treats them as "success" and sets the exit code to 0. This is caused by the intricacies of rsync trying to
+mirror some forbidden files and deletions on the host. See L<https://bugzilla.samba.org/show_bug.cgi?id=3653> for more info.
 
 The default is: undef ( not enabled )
 
@@ -543,15 +643,11 @@ The default is: undef ( not enabled )
 
 There is only one command you can use, as this is a very simple module.
 
-=head3 shutdown()
+=head3 shutdown
 
 Tells this module to shut down the underlying rsync session and terminate itself.
 
 	$_[KERNEL]->post( 'SmokeBox-Rsync', 'shutdown' );
-
-=head2 More Ideas
-
-None as of now, if you have ideas please submit them to me!
 
 =head2 Module Notes
 
@@ -562,75 +658,169 @@ You can enable debugging mode by doing this:
 
 =head1 SEE ALSO
 
-L<POE::Component::SmokeBox>
-
-L<File::Rsync>
-
-=head1 SUPPORT
-
-You can find documentation for this module with the perldoc command.
-
-    perldoc POE::Component::SmokeBox::Uploads::Rsync
-
-=head2 Websites
+Please see those modules/websites for more information related to this module.
 
 =over 4
 
-=item * Search CPAN
+=item *
 
-L<http://search.cpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
+L<POE::Component::SmokeBox|POE::Component::SmokeBox>
 
-=item * AnnoCPAN: Annotated CPAN documentation
+=item *
 
-L<http://annocpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
-
-=item * CPAN Ratings
-
-L<http://cpanratings.perl.org/d/POE-Component-SmokeBox-Uploads-Rsync>
-
-=item * CPAN Forum
-
-L<http://cpanforum.com/dist/POE-Component-SmokeBox-Uploads-Rsync>
-
-=item * RT: CPAN's Request Tracker
-
-L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-SmokeBox-Uploads-Rsync>
-
-=item * CPANTS Kwalitee
-
-L<http://cpants.perl.org/dist/overview/POE-Component-SmokeBox-Uploads-Rsync>
-
-=item * CPAN Testers Results
-
-L<http://cpantesters.org/distro/P/POE-Component-SmokeBox-Uploads-Rsync.html>
-
-=item * CPAN Testers Matrix
-
-L<http://matrix.cpantesters.org/?dist=POE-Component-SmokeBox-Uploads-Rsync>
-
-=item * Git Source Code Repository
-
-L<http://github.com/apocalypse/perl-poe-smokebox-uploads-rsync>
+L<File::Rsync|File::Rsync>
 
 =back
 
-=head2 Bugs
+=head1 SUPPORT
 
-Please report any bugs or feature requests to C<poe-component-smokebox-uploads-rsync at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-SmokeBox-Uploads-Rsync>.  I will be
-notified, and then you'll automatically be notified of progress on your bug as I make changes.
+=head2 Perldoc
+
+You can find documentation for this module with the perldoc command.
+
+  perldoc POE::Component::SmokeBox::Uploads::Rsync
+
+=head2 Websites
+
+The following websites have more information about this module, and may be of help to you. As always,
+in addition to those websites please use your favorite search engine to discover more resources.
+
+=over 4
+
+=item *
+
+Search CPAN
+
+L<http://search.cpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
+RT: CPAN's Bug Tracker
+
+L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
+AnnoCPAN: Annotated CPAN documentation
+
+L<http://annocpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
+CPAN Ratings
+
+L<http://cpanratings.perl.org/d/POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
+CPAN Forum
+
+L<http://cpanforum.com/dist/POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
+CPANTS Kwalitee
+
+L<http://cpants.perl.org/dist/overview/POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
+CPAN Testers Results
+
+L<http://cpantesters.org/distro/P/POE-Component-SmokeBox-Uploads-Rsync.html>
+
+=item *
+
+CPAN Testers Matrix
+
+L<http://matrix.cpantesters.org/?dist=POE-Component-SmokeBox-Uploads-Rsync>
+
+=back
+
+=head2 Email
+
+You can email the author of this module at C<APOCAL at cpan.org> asking for help with any problems you have.
+
+=head2 Internet Relay Chat
+
+You can get live help by using IRC ( Internet Relay Chat ). If you don't know what IRC is,
+please read this excellent guide: L<http://en.wikipedia.org/wiki/Internet_Relay_Chat>. Please
+be courteous and patient when talking to us, as we might be busy or sleeping! You can join
+those networks/channels and get help:
+
+=over 4
+
+=item *
+
+irc.perl.org
+
+You can connect to the server at 'irc.perl.org' and join this channel: #perl-help then talk to this person for help: Apocalypse.
+
+=item *
+
+irc.freenode.net
+
+You can connect to the server at 'irc.freenode.net' and join this channel: #perl then talk to this person for help: Apocal.
+
+=item *
+
+irc.efnet.org
+
+You can connect to the server at 'irc.efnet.org' and join this channel: #perl then talk to this person for help: Ap0cal.
+
+=back
+
+=head2 Bugs / Feature Requests
+
+Please report any bugs or feature requests by email to C<bug-poe-component-smokebox-uploads-rsync at rt.cpan.org>, or through
+the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-SmokeBox-Uploads-Rsync>. You will be automatically notified of any
+progress on the request by the system.
+
+=head2 Source Code
+
+The code is open to the world, and available for you to hack on. Please feel free to browse it and play
+with it, or whatever. If you want to contribute patches, please send me a diff or prod me to pull
+from your repository :)
+
+L<http://github.com/apocalypse/perl-poe-smokebox-uploads-rsync>
+
+  git clone git://github.com/apocalypse/perl-poe-smokebox-uploads-rsync.git
 
 =head1 AUTHOR
 
-Apocalypse E<lt>apocal@cpan.orgE<gt>
-
-Thanks to BinGOs for writing the excellent L<POE::Component::SmokeBox> module!
+Apocalypse <APOCAL@cpan.org>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2010 by Apocalypse
+This software is copyright (c) 2011 by Apocalypse.
 
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself.
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
+
+The full text of the license can be found in the LICENSE file included with this distribution.
+
+=head1 DISCLAIMER OF WARRANTY
+
+BECAUSE THIS SOFTWARE IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
+FOR THE SOFTWARE, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT
+WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER
+PARTIES PROVIDE THE SOFTWARE "AS IS" WITHOUT WARRANTY OF ANY KIND,
+EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE
+SOFTWARE IS WITH YOU. SHOULD THE SOFTWARE PROVE DEFECTIVE, YOU ASSUME
+THE COST OF ALL NECESSARY SERVICING, REPAIR, OR CORRECTION.
+
+IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
+WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY MODIFY AND/OR
+REDISTRIBUTE THE SOFTWARE AS PERMITTED BY THE ABOVE LICENCE, BE LIABLE
+TO YOU FOR DAMAGES, INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL, OR
+CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OR INABILITY TO USE THE
+SOFTWARE (INCLUDING BUT NOT LIMITED TO LOSS OF DATA OR DATA BEING
+RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD PARTIES OR A
+FAILURE OF THE SOFTWARE TO OPERATE WITH ANY OTHER SOFTWARE), EVEN IF
+SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGES.
 
 =cut
+
