@@ -2,7 +2,7 @@
 #
 # This file is part of POE-Component-SmokeBox-Uploads-Rsync
 #
-# This software is copyright (c) 2011 by Apocalypse.
+# This software is copyright (c) 2014 by Apocalypse.
 #
 # This is free software; you can redistribute it and/or modify it under
 # the same terms as the Perl 5 programming language system itself.
@@ -26,8 +26,7 @@ POE::Session->create(
 sub _start {
 	# Tell the poco to start it's stuff!
 	POE::Component::SmokeBox::Uploads::Rsync->spawn(
-		# thanks to DAGOLDEN for allowing us to use his mirror!
-		'rsync_src'	=> 'cpan.dagolden.com::CPAN',
+		'rsync_src'	=> 'mirrors.kernel.org::mirrors/CPAN/',
 		'rsyncdone'	=> 'rsyncdone',
 	) or die "Unable to spawn the poco-rsync!";
 

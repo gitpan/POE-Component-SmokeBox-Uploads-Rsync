@@ -1,19 +1,16 @@
 #
 # This file is part of POE-Component-SmokeBox-Uploads-Rsync
 #
-# This software is copyright (c) 2011 by Apocalypse.
+# This software is copyright (c) 2014 by Apocalypse.
 #
 # This is free software; you can redistribute it and/or modify it under
 # the same terms as the Perl 5 programming language system itself.
 #
 use strict; use warnings;
 package POE::Component::SmokeBox::Uploads::Rsync;
-BEGIN {
-  $POE::Component::SmokeBox::Uploads::Rsync::VERSION = '1.000';
-}
-BEGIN {
-  $POE::Component::SmokeBox::Uploads::Rsync::AUTHORITY = 'cpan:APOCAL';
-}
+# git description: release-1.000-7-g9c6e8f2
+$POE::Component::SmokeBox::Uploads::Rsync::VERSION = '1.001';
+our $AUTHORITY = 'cpan:APOCAL';
 
 # ABSTRACT: Obtain uploaded CPAN modules via rsync
 
@@ -25,7 +22,8 @@ use parent 'POE::Session::AttributeBased'; # TODO do we really need to prereq 0.
 # The misc stuff we will use
 use File::Spec;
 
-# TODO argh, we need to fool Test::Apocalypse::Dependencies!
+# argh, we need to fool Test::Apocalypse::Dependencies!
+# Also, this will let dzil autoprereqs pick it up without actually loading it...
 if ( 0 ) {
 	require File::Rsync;
 }
@@ -35,19 +33,31 @@ BEGIN {
 	if ( ! defined &DEBUG ) { *DEBUG = sub () { 0 } }
 }
 
+#<@BinGOs> that works. I have no FRMRecent files anywhere in *this* particular mirror's tree
+#<@BinGOs> I run rrr-client on the 'velvet' host and rsync to two other boxen from there.
+#
+#bash-4.0# cat exclude.cpan
+#/modules/by-module/*
+#/modules/by-category/*
+#*FRMRecent-RECENT*
+#bash-4.0#
+#
+#/usr/pkg/bin/rsync -av --no-owner --delete --exclude-from /root/exclude.cpan --delete-excluded rsync://velvet.bingosnet.co.uk /cpan /home/ftp/CPAN/ 2>&1 | tee -a /root/cpan.log
+
 # starts the component!
 sub spawn {
 	my $class = shift;
+	$class = $class; # TODO shutup UnusedVars
 
 	# The options hash
 	my %opt;
 
 	# Support passing in a hash ref or a regular hash
-	if ( ( @_ & 1 ) and ref $_[0] and ref( $_[0] ) eq 'HASH' ) {
+	if ( scalar @_ == 1 and ref $_[0] and ref( $_[0] ) eq 'HASH' ) {
 		%opt = %{ $_[0] };
 	} else {
 		# Sanity checking
-		if ( @_ & 1 ) {
+		if ( @_ % 2 ) {
 			warn __PACKAGE__ . ' requires an even number of options passed to spawn()';
 			return 0;
 		}
@@ -57,6 +67,18 @@ sub spawn {
 
 	# lowercase keys
 	%opt = map { lc($_) => $opt{$_} } keys %opt;
+
+	# Should we rsync the entire CPAN or just the authors directory?
+	if ( ! exists $opt{'rsync_all'} or ! defined $opt{'rsync_all'} ) {
+		if ( DEBUG ) {
+			warn 'Using default RSYNC_ALL = 0';
+		}
+
+		$opt{'rsync_all'} = 0;
+	} else {
+		# booleanize it
+		$opt{'rsync_all'} = $opt{'rsync_all'} ? 1 : 0;
+	}
 
 	# setup the rsync server
 	if ( ! exists $opt{'rsync_src'} or ! defined $opt{'rsync_src'} ) {
@@ -69,11 +91,13 @@ sub spawn {
 		# i.e. 'cpan.cpantesters.org::cpan'
 
 		# Append the authors/id directory
-		if ( $opt{'rsync_src'} !~ m|authors/id$| ) {
-			if ( $opt{'rsync_src'} =~ m|/$| ) {
-				$opt{'rsync_src'} .= 'authors/id';
-			} else {
-				$opt{'rsync_src'} .= '/authors/id';
+		if ( ! $opt{'rsync_all'} ) {
+			if ( $opt{'rsync_src'} !~ m|authors/id$| ) {
+				if ( $opt{'rsync_src'} =~ m|/$| ) {
+					$opt{'rsync_src'} .= 'authors/id';
+				} else {
+					$opt{'rsync_src'} .= '/authors/id';
+				}
 			}
 		}
 	}
@@ -82,7 +106,11 @@ sub spawn {
 	# Append the authors directory ( rsync will sync into id automatically )
 	# If we appended "authors/id" then rsync will create a local authors/id/id directory!$!@%#$
 	if ( ! exists $opt{'rsync_dst'} or ! defined $opt{'rsync_dst'} ) {
-		my $dir = File::Spec->catdir( $ENV{HOME}, 'CPAN', 'authors' );
+		my $dir = File::Spec->catdir( $ENV{HOME}, 'CPAN' );
+		if ( ! $opt{'rsync_all'} ) {
+			$dir = File::Spec->catdir( $dir, 'authors' );
+		}
+
 		if ( DEBUG ) {
 			warn 'Using default RSYNC_DST = ' . $dir;
 		}
@@ -90,8 +118,10 @@ sub spawn {
 		# Set the default
 		$opt{'rsync_dst'} = $dir;
 	} else {
-		if ( $opt{'rsync_dst'} !~ /authors$/ ) {
-			$opt{'rsync_dst'} = File::Spec->catdir( $opt{'rsync_dst'}, 'authors' );
+		if ( ! $opt{'rsync_all'} ) {
+			if ( $opt{'rsync_dst'} !~ /authors$/ ) {
+				$opt{'rsync_dst'} = File::Spec->catdir( $opt{'rsync_dst'}, 'authors' );
+			}
 		}
 	}
 
@@ -127,6 +157,9 @@ sub spawn {
 
 		# skip the motd, which just consumes bandwidth ;)
 		'literal'		=> [ '--no-motd', ],
+
+		# if we rsync the entire CPAN, we delete files too!
+		( $opt{'rsync_all'} ? ( 'delete' => 1 ) : () ),
 
 		# use the provided options
 		%{ $opt{'rsync'} },
@@ -211,6 +244,7 @@ sub spawn {
 		'heap'	=>	{
 			'ALIAS'		=> $opt{'alias'},
 			'RSYNC_OPT'	=> $opt{'rsync'},
+			'RSYNC_ALL'	=> $opt{'rsync_all'},
 			'INTERVAL'	=> $opt{'interval'},
 
 			'SESSION'	=> $opt{'session'},
@@ -279,7 +313,7 @@ sub _rsync_start : State {
 }
 
 sub _rsync_exec_result : State {
-	my( $ref, $result ) = @_[ARG0, ARG1];
+	my $result = $_[ARG1];
 
 	if ( DEBUG ) {
 		warn "Rsync exec result: $result";
@@ -298,7 +332,7 @@ sub _rsync_exec_result : State {
 }
 
 sub _rsync_status_result : State {
-	my( $ref, $result ) = @_[ARG0, ARG1];
+	my $result = $_[ARG1];
 
 	# We ignore status 23/24 errors, it happens occassionally...
 	if ( $result == 23 or $result == 24 ) {
@@ -338,7 +372,7 @@ sub _rsync_status_result : State {
 }
 
 sub _rsync_err_result : State {
-	my( $ref, $result ) = @_[ARG0, ARG1];
+	my $result = $_[ARG1];
 
 	warn "Got rsync STDERR:";
 	warn $_ for @$result;
@@ -351,7 +385,7 @@ sub _rsync_err_result : State {
 }
 
 sub _rsync_out_result : State {
-	my( $ref, $result ) = @_[ARG0, ARG1];
+	my $result = $_[ARG1];
 
 	# We're done with the rsync subprocess, shut it down!
 	$_[KERNEL]->post( $_[HEAP]->{'RSYNC'}->session_id, 'shutdown' );
@@ -371,7 +405,8 @@ sub _rsync_out_result : State {
 	my @modules;
 	foreach my $l ( @$result ) {
 		# file regex taken from POE::Component::SmokeBox::Uploads::NNTP, thanks BinGOs!
-		if ( $l =~ /^\>f\+{9}\s+id\/(\w+\/\w+\/\w+\/.+\.(?:tar\.(?:gz|bz2)|tgz|zip))$/ ) {
+		# if RSYNC_ALL is enabled, we rsync from the root - otherwise the id directory
+		if ( $l =~ /^\>f\+{9}\s+(?:authors\/)?id\/(\w+\/\w+\/\w+\/.+\.(?:tar\.(?:gz|bz2)|tgz|zip))$/ ) {
 			push( @modules, $1 );
 		}
 	}
@@ -485,15 +520,15 @@ sub shutdown : State {
 
 1;
 
-
 __END__
+
 =pod
 
-=for :stopwords Apocalypse cpan testmatrix url annocpan anno bugtracker rt cpants kwalitee
-diff irc mailto metadata placeholders ARG admin crontabbed dists rsyncdone
-BinGOs
+=encoding UTF-8
 
-=encoding utf-8
+=for :stopwords Apocalypse cpan testmatrix url annocpan anno bugtracker rt cpants kwalitee
+diff irc mailto metadata placeholders metacpan ARG admin crontabbed dists
+rsyncdone BinGOs
 
 =for Pod::Coverage DEBUG rsync_exit_string
 
@@ -503,7 +538,7 @@ POE::Component::SmokeBox::Uploads::Rsync - Obtain uploaded CPAN modules via rsyn
 
 =head1 VERSION
 
-  This document describes v1.000 of POE::Component::SmokeBox::Uploads::Rsync - released March 31, 2011 as part of POE-Component-SmokeBox-Uploads-Rsync.
+  This document describes v1.001 of POE::Component::SmokeBox::Uploads::Rsync - released November 03, 2014 as part of POE-Component-SmokeBox-Uploads-Rsync.
 
 =head1 SYNOPSIS
 
@@ -523,8 +558,7 @@ POE::Component::SmokeBox::Uploads::Rsync - Obtain uploaded CPAN modules via rsyn
 	sub _start {
 		# Tell the poco to start it's stuff!
 		POE::Component::SmokeBox::Uploads::Rsync->spawn(
-			# thanks to DAGOLDEN for allowing us to use his mirror!
-			'rsync_src'	=> 'cpan.dagolden.com::CPAN',
+			'rsync_src'	=> 'mirrors.kernel.org::mirrors/CPAN/',
 		) or die "Unable to spawn the poco-rsync!";
 
 		return;
@@ -540,9 +574,8 @@ POE::Component::SmokeBox::Uploads::Rsync - Obtain uploaded CPAN modules via rsyn
 =head1 DESCRIPTION
 
 POE::Component::SmokeBox::Uploads::Rsync is a POE component that alerts newly uploaded CPAN distributions. It obtains this information by
-running rsync against a CPAN mirror. This effectively keeps your local CPAN mirror up-to-date too! This is only for the C<CPAN/authors/id>
-directory, to make it easier on the rsync process. If you want to keep your entire mirror up-to-date, please use your normal
-( crontabbed? ) rsync script and tell it to exclude the C<authors/id> directory to prevent missed uploads.
+running rsync against a CPAN mirror. This is only for the C<CPAN/authors/id> directory, to make it easier on the rsync process. If you
+want to keep your entire mirror up-to-date, you can enable the L</rsync_all> option.
 
 Really, all you have to do is load the module and call it's spawn() method:
 
@@ -566,9 +599,9 @@ The default is: SmokeBox-Rsync
 This sets the rsync source ( the server you will be mirroring from ) and it is a mandatory parameter. For a list of valid rsync mirrors, please
 consult the L<http://www.cpan.org/SITES.html> mirror list.
 
-The default is: undefined
+An example is: mirrors.kernel.org::mirrors/CPAN/
 
-This component will automatically append '/authors/id' to the src, please don't add it yourself.
+The default is: undefined
 
 =head3 rsync_dst
 
@@ -576,7 +609,15 @@ This sets the local rsync destination ( where your local CPAN mirror resides )
 
 The default is: $ENV{HOME}/CPAN
 
-This component will automatically append '/authors' to the dst, please don't add it yourself.
+=head3 rsync_all
+
+If this is a true value, this module will rsync the entire CPAN. Useful for lazy people who don't want to run a separate rsync process
+for the rest of CPAN. If it is false, this module will rsync only the authors/id directory to make the rsync run faster.
+
+Additionally, if this is true the option C<--delete> will be passed to the rsync process. This keeps your local copy exactly the same as it
+is on CPAN. If you want to override this just pass a delete=0 option to the L</rsync> hash.
+
+The default is: false
 
 =head3 rsync
 
@@ -689,7 +730,17 @@ in addition to those websites please use your favorite search engine to discover
 
 =item *
 
+MetaCPAN
+
+A modern, open-source CPAN search engine, useful to view POD in HTML format.
+
+L<http://metacpan.org/release/POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
 Search CPAN
+
+The default CPAN search engine, useful to view POD in HTML format.
 
 L<http://search.cpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
 
@@ -697,11 +748,15 @@ L<http://search.cpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
 
 RT: CPAN's Bug Tracker
 
+The RT ( Request Tracker ) website is the default bug/issue tracking system for CPAN.
+
 L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-SmokeBox-Uploads-Rsync>
 
 =item *
 
-AnnoCPAN: Annotated CPAN documentation
+AnnoCPAN
+
+The AnnoCPAN is a website that allows community annotations of Perl module documentation.
 
 L<http://annocpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
 
@@ -709,31 +764,49 @@ L<http://annocpan.org/dist/POE-Component-SmokeBox-Uploads-Rsync>
 
 CPAN Ratings
 
+The CPAN Ratings is a website that allows community ratings and reviews of Perl modules.
+
 L<http://cpanratings.perl.org/d/POE-Component-SmokeBox-Uploads-Rsync>
 
 =item *
 
 CPAN Forum
 
+The CPAN Forum is a web forum for discussing Perl modules.
+
 L<http://cpanforum.com/dist/POE-Component-SmokeBox-Uploads-Rsync>
 
 =item *
 
-CPANTS Kwalitee
+CPANTS
 
-L<http://cpants.perl.org/dist/overview/POE-Component-SmokeBox-Uploads-Rsync>
+The CPANTS is a website that analyzes the Kwalitee ( code metrics ) of a distribution.
+
+L<http://cpants.cpanauthors.org/dist/overview/POE-Component-SmokeBox-Uploads-Rsync>
 
 =item *
 
-CPAN Testers Results
+CPAN Testers
 
-L<http://cpantesters.org/distro/P/POE-Component-SmokeBox-Uploads-Rsync.html>
+The CPAN Testers is a network of smokers who run automated tests on uploaded CPAN distributions.
+
+L<http://www.cpantesters.org/distro/P/POE-Component-SmokeBox-Uploads-Rsync>
 
 =item *
 
 CPAN Testers Matrix
 
+The CPAN Testers Matrix is a website that provides a visual overview of the test results for a distribution on various Perls/platforms.
+
 L<http://matrix.cpantesters.org/?dist=POE-Component-SmokeBox-Uploads-Rsync>
+
+=item *
+
+CPAN Testers Dependencies
+
+The CPAN Testers Dependencies is a website that shows a chart of the test results of all dependencies for a distribution.
+
+L<http://deps.cpantesters.org/?module=POE::Component::SmokeBox::Uploads::Rsync>
 
 =back
 
@@ -782,9 +855,9 @@ The code is open to the world, and available for you to hack on. Please feel fre
 with it, or whatever. If you want to contribute patches, please send me a diff or prod me to pull
 from your repository :)
 
-L<http://github.com/apocalypse/perl-poe-smokebox-uploads-rsync>
+L<https://github.com/apocalypse/perl-poe-smokebox-uploads-rsync>
 
-  git clone git://github.com/apocalypse/perl-poe-smokebox-uploads-rsync.git
+  git clone https://github.com/apocalypse/perl-poe-smokebox-uploads-rsync.git
 
 =head1 AUTHOR
 
@@ -792,35 +865,33 @@ Apocalypse <APOCAL@cpan.org>
 
 =head1 COPYRIGHT AND LICENSE
 
-This software is copyright (c) 2011 by Apocalypse.
+This software is copyright (c) 2014 by Apocalypse.
 
 This is free software; you can redistribute it and/or modify it under
 the same terms as the Perl 5 programming language system itself.
 
-The full text of the license can be found in the LICENSE file included with this distribution.
+The full text of the license can be found in the
+F<LICENSE> file included with this distribution.
 
 =head1 DISCLAIMER OF WARRANTY
 
-BECAUSE THIS SOFTWARE IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
-FOR THE SOFTWARE, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT
-WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER
-PARTIES PROVIDE THE SOFTWARE "AS IS" WITHOUT WARRANTY OF ANY KIND,
-EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE
-SOFTWARE IS WITH YOU. SHOULD THE SOFTWARE PROVE DEFECTIVE, YOU ASSUME
-THE COST OF ALL NECESSARY SERVICING, REPAIR, OR CORRECTION.
+THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
+APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
+HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY
+OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM
+IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF
+ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
 
 IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
-WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY MODIFY AND/OR
-REDISTRIBUTE THE SOFTWARE AS PERMITTED BY THE ABOVE LICENCE, BE LIABLE
-TO YOU FOR DAMAGES, INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL, OR
-CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OR INABILITY TO USE THE
-SOFTWARE (INCLUDING BUT NOT LIMITED TO LOSS OF DATA OR DATA BEING
-RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD PARTIES OR A
-FAILURE OF THE SOFTWARE TO OPERATE WITH ANY OTHER SOFTWARE), EVEN IF
-SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGES.
+WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
+THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
+GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
+USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
+DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
+PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
+EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGES.
 
 =cut
-
